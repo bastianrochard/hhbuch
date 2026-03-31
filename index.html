@@ -364,6 +364,45 @@ body {
 .month-btn:active { background: var(--bg); }
 .month-label { font-size: 16px; font-weight: 600; min-width: 140px; text-align: center; }
 
+/* Category horizontal bars */
+.cat-bar-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 10px;
+}
+.cat-bar-label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 500; color: var(--text-secondary);
+  min-width: 100px; flex-shrink: 0;
+}
+.cat-bar-label .emoji { font-size: 16px; }
+.cat-bar-track {
+  flex: 1; height: 24px; background: var(--bg);
+  border-radius: 6px; overflow: hidden; position: relative;
+}
+.cat-bar-fill {
+  height: 100%; border-radius: 6px;
+  transition: width 0.4s ease; min-width: 2px;
+}
+.cat-bar-value {
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
+  color: var(--text-secondary); min-width: 70px;
+  text-align: right; flex-shrink: 0;
+}
+.cat-bar-pct {
+  font-size: 11px; color: var(--text-muted);
+  min-width: 36px; text-align: right; flex-shrink: 0;
+}
+.cat-bars-empty {
+  text-align: center; padding: 24px; color: var(--text-muted); font-size: 14px;
+}
+.cat-bars-total {
+  display: flex; justify-content: space-between; align-items: center;
+  padding-top: 10px; margin-top: 10px;
+  border-top: 1.5px solid var(--border);
+  font-size: 14px; font-weight: 600;
+}
+.cat-bars-total .val { font-family: var(--mono); color: var(--red); }
+
 /* Bar chart */
 .bar-chart { display: flex; align-items: flex-end; gap: 4px; height: 120px; margin-top: 12px; }
 .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
@@ -626,8 +665,7 @@ body {
   <div class="summary-row" id="dash-summary"></div>
   <div class="card">
     <div class="card-title">Ausgaben nach Kategorie</div>
-    <canvas id="donut-chart" width="300" height="200"></canvas>
-    <div class="legend" id="cat-legend"></div>
+    <div id="cat-bars"></div>
   </div>
   <div class="card">
     <div class="card-title">Monatsverlauf (6 Monate)</div>
@@ -727,6 +765,13 @@ body {
     <button class="setting-action danger" onclick="resetData()">Zurücksetzen</button>
   </div>
   <div style="padding:24px 20px 0">
+    <div class="card-title" style="padding:8px 0">Kategorien</div>
+  </div>
+  <div id="category-list"></div>
+  <div style="padding:8px 20px">
+    <button class="setting-action" onclick="addCategory()" style="width:100%;text-align:center;padding:12px">+ Neue Kategorie</button>
+  </div>
+  <div style="padding:24px 20px 0">
     <div class="card-title" style="padding:8px 0">Konten</div>
   </div>
   <div id="account-list"></div>
@@ -734,7 +779,7 @@ body {
     <div class="card-title" style="padding:8px 0">Info</div>
   </div>
   <div class="setting-row">
-    <span class="setting-label" style="font-size:13px;color:var(--text-muted)">Haushaltsbuch v1.1 — Sync via Nextcloud WebDAV, Offline-Fallback via LocalStorage.</span>
+    <span class="setting-label" style="font-size:13px;color:var(--text-muted)">Haushaltsbuch v1.2 — Sync via Nextcloud WebDAV, Offline-Fallback via LocalStorage.</span>
   </div>
 </div>
 
@@ -844,6 +889,14 @@ body {
         <button class="interval-btn" onclick="setFixInterval('yearly')">Jahr</button>
       </div>
     </div>
+    <div class="form-group">
+      <label class="form-label">Gültig ab (optional)</label>
+      <input type="month" class="form-input" id="fix-gueltig-ab" placeholder="z.B. 2026-04">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Gültig bis (optional, leer = unbegrenzt)</label>
+      <input type="month" class="form-input" id="fix-gueltig-bis">
+    </div>
     <button class="btn-primary" onclick="saveFix()">Speichern</button>
     <button class="btn-danger" id="btn-delete-fix" style="display:none" onclick="deleteFix()">Löschen</button>
   </div>
@@ -880,7 +933,7 @@ body {
 // ===== DATA MODEL =====
 const STORAGE_KEY = 'haushaltsbuch_v1';
 
-const CATEGORIES = [
+const DEFAULT_CATEGORIES = [
   { id: 'wohnen', name: 'Wohnen', emoji: '🏠', color: '#2563EB' },
   { id: 'auto', name: 'Auto', emoji: '🚗', color: '#7C3AED' },
   { id: 'kinder', name: 'Kinder', emoji: '🎒', color: '#DB2777' },
@@ -895,6 +948,15 @@ const CATEGORIES = [
   { id: 'sonstiges', name: 'Sonstiges', emoji: '📦', color: '#6B7280' },
 ];
 
+function getCategories() {
+  return (data.customCategories && data.customCategories.length > 0)
+    ? data.customCategories
+    : DEFAULT_CATEGORIES;
+}
+
+// Keep CATEGORIES as a getter for backward compat
+let CATEGORIES = DEFAULT_CATEGORIES;
+
 const ACCOUNTS = [
   { id: 'bastian', name: 'Bastian', short: 'B' },
   { id: 'frau', name: 'Frau', short: 'F' },
@@ -902,6 +964,7 @@ const ACCOUNTS = [
 ];
 
 let data = loadData();
+CATEGORIES = getCategories();
 let currentMonth = new Date();
 let bookingMonth = new Date();
 let bookingFilter = 'alle';
@@ -918,7 +981,7 @@ let fixAccount = 'gemeinsam';
 let fixInterval = 'monthly';
 
 function defaultData() {
-  return { fixkosten: [], buchungen: [], version: 1 };
+  return { fixkosten: [], buchungen: [], customCategories: null, version: 2 };
 }
 
 function loadData() {
@@ -1235,7 +1298,7 @@ function fmtShort(n) {
   return Math.round(n).toString();
 }
 
-function getCat(id) { return CATEGORIES.find(c => c.id === id) || CATEGORIES[CATEGORIES.length-1]; }
+function getCat(id) { const cats = getCategories(); return cats.find(c => c.id === id) || cats[cats.length-1]; }
 function getAcc(id) { return ACCOUNTS.find(a => a.id === id) || ACCOUNTS[0]; }
 
 function monthlyAmount(fix) {
@@ -1243,6 +1306,18 @@ function monthlyAmount(fix) {
   if (fix.interval === 'quarterly') return amt / 3;
   if (fix.interval === 'yearly') return amt / 12;
   return amt;
+}
+
+// Check if a fixkosten entry is active in a given month (YYYY-MM)
+function isFixActiveInMonth(fix, mk) {
+  if (fix.gueltigAb && mk < fix.gueltigAb) return false;
+  if (fix.gueltigBis && mk > fix.gueltigBis) return false;
+  return true;
+}
+
+// Get active fixkosten for a given month
+function getActiveFixkosten(mk) {
+  return data.fixkosten.filter(f => isFixActiveInMonth(f, mk));
 }
 
 function intervalLabel(interval) {
@@ -1263,14 +1338,11 @@ function renderDashboard() {
   const mk = monthKey(currentMonth);
   document.getElementById('month-label').textContent = monthName(currentMonth);
   
-  // Calculate fix costs monthly total
-  const fixMonthly = data.fixkosten.reduce((sum, f) => {
-    const m = monthlyAmount(f);
-    return sum + (f.type === 'expense' ? -m : m);
-  }, 0);
+  // Get active fixkosten for this month
+  const activeFix = getActiveFixkosten(mk);
   
-  const fixExpense = data.fixkosten.reduce((s, f) => f.type === 'expense' ? s + monthlyAmount(f) : s, 0);
-  const fixIncome = data.fixkosten.reduce((s, f) => f.type === 'income' ? s + monthlyAmount(f) : s, 0);
+  const fixExpense = activeFix.reduce((s, f) => f.type === 'expense' ? s + monthlyAmount(f) : s, 0);
+  const fixIncome = activeFix.reduce((s, f) => f.type === 'income' ? s + monthlyAmount(f) : s, 0);
   
   // Variable bookings for month
   const monthBookings = data.buchungen.filter(b => b.date && b.date.startsWith(mk));
@@ -1292,19 +1364,17 @@ function renderDashboard() {
     </div>
     <div class="summary-item">
       <div class="summary-label">Saldo</div>
-      <div class="summary-value balance">${fmt(balance)}</div>
+      <div class="summary-value ${balance >= 0 ? 'balance' : 'expense'}">${fmt(balance)}</div>
     </div>
   `;
   
   // Category breakdown (expenses only)
   const catMap = {};
-  // Fix expenses distributed to categories
-  data.fixkosten.forEach(f => {
+  activeFix.forEach(f => {
     if (f.type === 'expense') {
       catMap[f.category] = (catMap[f.category] || 0) + monthlyAmount(f);
     }
   });
-  // Variable expenses
   monthBookings.forEach(b => {
     if (b.type === 'expense') {
       catMap[b.category] = (catMap[b.category] || 0) + b.amount;
@@ -1312,80 +1382,53 @@ function renderDashboard() {
   });
   
   const catEntries = Object.entries(catMap).sort((a, b) => b[1] - a[1]);
-  renderDonut(catEntries, totalExpense);
-  renderLegend(catEntries);
+  renderCatBars(catEntries, totalExpense);
   renderBarChart();
 }
 
-function renderDonut(entries, total) {
-  const canvas = document.getElementById('donut-chart');
-  const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = canvas.clientWidth * dpr;
-  canvas.height = canvas.clientHeight * dpr;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-  
-  const cx = canvas.clientWidth / 2;
-  const cy = canvas.clientHeight / 2;
-  const r = Math.min(cx, cy) - 10;
-  const inner = r * 0.6;
+function renderCatBars(entries, total) {
+  const el = document.getElementById('cat-bars');
   
   if (entries.length === 0 || total === 0) {
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.arc(cx, cy, inner, 0, Math.PI * 2, true);
-    ctx.fillStyle = '#F0EEEA';
-    ctx.fill();
-    ctx.font = '500 14px DM Sans';
-    ctx.fillStyle = '#9B9B9B';
-    ctx.textAlign = 'center';
-    ctx.fillText('Keine Daten', cx, cy + 5);
+    el.innerHTML = '<div class="cat-bars-empty">Keine Ausgaben in diesem Monat</div>';
     return;
   }
   
-  let angle = -Math.PI / 2;
-  entries.forEach(([catId, val]) => {
-    const cat = getCat(catId);
-    const sweep = (val / total) * Math.PI * 2;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, angle, angle + sweep);
-    ctx.arc(cx, cy, inner, angle + sweep, angle, true);
-    ctx.closePath();
-    ctx.fillStyle = cat.color;
-    ctx.fill();
-    angle += sweep;
-  });
+  const max = entries[0][1]; // Highest value (already sorted)
   
-  // Center text
-  ctx.fillStyle = '#1A1A1A';
-  ctx.font = '700 18px DM Mono';
-  ctx.textAlign = 'center';
-  ctx.fillText(fmt(total), cx, cy - 2);
-  ctx.font = '400 11px DM Sans';
-  ctx.fillStyle = '#9B9B9B';
-  ctx.fillText('Gesamt Ausgaben', cx, cy + 16);
-}
-
-function renderLegend(entries) {
-  const el = document.getElementById('cat-legend');
-  el.innerHTML = entries.map(([catId, val]) => {
+  let html = entries.map(([catId, val]) => {
     const cat = getCat(catId);
-    return `<div class="legend-item"><span class="legend-dot" style="background:${cat.color}"></span>${cat.emoji} ${cat.name}: ${fmt(val)}</div>`;
+    const pct = (val / total) * 100;
+    const barPct = (val / max) * 100;
+    return `<div class="cat-bar-row">
+      <div class="cat-bar-label"><span class="emoji">${cat.emoji}</span> ${cat.name}</div>
+      <div class="cat-bar-track">
+        <div class="cat-bar-fill" style="width:${barPct}%;background:${cat.color}"></div>
+      </div>
+      <div class="cat-bar-value">${fmt(val)}</div>
+      <div class="cat-bar-pct">${pct.toFixed(0)}%</div>
+    </div>`;
   }).join('');
+  
+  html += `<div class="cat-bars-total">
+    <span>Gesamt</span>
+    <span class="val">${fmt(total)}</span>
+  </div>`;
+  
+  el.innerHTML = html;
 }
 
 function renderBarChart() {
   const el = document.getElementById('bar-chart');
   const months = [];
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(currentMonth);
-    d.setMonth(d.getMonth() - i);
+    const d = new Date(currentMonth.getFullYear(), currentMonth.getMonth() - i, 1);
     months.push({ date: d, key: monthKey(d) });
   }
   
   const values = months.map(m => {
-    const fixExp = data.fixkosten.reduce((s, f) => f.type === 'expense' ? s + monthlyAmount(f) : s, 0);
+    const activeFix = getActiveFixkosten(m.key);
+    const fixExp = activeFix.reduce((s, f) => f.type === 'expense' ? s + monthlyAmount(f) : s, 0);
     const varExp = data.buchungen.filter(b => b.type === 'expense' && b.date && b.date.startsWith(m.key))
       .reduce((s, b) => s + b.amount, 0);
     return fixExp + varExp;
@@ -1396,15 +1439,19 @@ function renderBarChart() {
   el.innerHTML = months.map((m, i) => {
     const pct = (values[i] / max) * 100;
     const isCurrentMonth = m.key === monthKey(currentMonth);
+    const label = m.date.toLocaleDateString('de-DE', { month: 'short' });
+    const amount = values[i] > 0 ? fmtShort(values[i]) : '';
     return `<div class="bar-col">
-      <div class="bar" style="height:${Math.max(pct, 2)}%;background:${isCurrentMonth ? 'var(--accent)' : 'var(--border)'}"></div>
-      <div class="bar-label">${m.date.toLocaleDateString('de-DE', {month:'short'})}</div>
+      <div style="font-size:10px;color:var(--text-muted);font-family:var(--mono);margin-bottom:2px">${amount}</div>
+      <div class="bar" style="height:${Math.max(pct, 2)}%;background:${isCurrentMonth ? 'var(--accent)' : '#CBD5E1'}"></div>
+      <div class="bar-label">${label}</div>
     </div>`;
   }).join('');
 }
 
 // ===== FIXKOSTEN =====
 function renderFixkosten() {
+  const mk = monthKey(new Date()); // current real month for "active" display
   const grouped = {};
   ACCOUNTS.forEach(a => grouped[a.id] = []);
   
@@ -1423,11 +1470,20 @@ function renderFixkosten() {
       const monthly = monthlyAmount(f);
       const sign = f.type === 'income' ? '+' : '-';
       const color = f.type === 'income' ? 'var(--green)' : 'var(--red)';
-      html += `<div class="fix-item" onclick="editFix('${f.id}')">
+      const active = isFixActiveInMonth(f, mk);
+      const opacity = active ? '1' : '0.45';
+      
+      // Build detail text
+      let detail = cat.name + ' · ' + intervalLabel(f.interval);
+      if (f.gueltigAb) detail += ' · ab ' + f.gueltigAb.replace('-', '/');
+      if (f.gueltigBis) detail += ' · bis ' + f.gueltigBis.replace('-', '/');
+      if (!active) detail += ' · inaktiv';
+      
+      html += `<div class="fix-item" onclick="editFix('${f.id}')" style="opacity:${opacity}">
         <div class="fix-icon" style="background:${cat.color}15;color:${cat.color}">${cat.emoji}</div>
         <div class="fix-info">
           <div class="fix-name">${f.name}</div>
-          <div class="fix-detail">${cat.name} · ${intervalLabel(f.interval)}</div>
+          <div class="fix-detail">${detail}</div>
         </div>
         <div>
           <div class="fix-amount" style="color:${color}">${sign} ${fmt(f.amount)}</div>
@@ -1447,15 +1503,9 @@ function renderFixkosten() {
   
   document.getElementById('fixkosten-list').innerHTML = html;
   
-  // Total
-  const totalFix = data.fixkosten.reduce((s, f) => {
-    const m = monthlyAmount(f);
-    return s + (f.type === 'expense' ? m : 0);
-  }, 0);
-  const totalFixIncome = data.fixkosten.reduce((s, f) => {
-    const m = monthlyAmount(f);
-    return s + (f.type === 'income' ? m : 0);
-  }, 0);
+  // Total (only currently active)
+  const activeFix = getActiveFixkosten(mk);
+  const totalFix = activeFix.reduce((s, f) => f.type === 'expense' ? s + monthlyAmount(f) : s, 0);
   document.getElementById('fix-total').textContent = fmt(totalFix);
 }
 
@@ -1520,6 +1570,59 @@ function renderSettings() {
     </div>
   `).join('');
   renderNcConfig();
+  renderCategoryList();
+}
+
+function renderCategoryList() {
+  const cats = getCategories();
+  document.getElementById('category-list').innerHTML = cats.map((c, i) => `
+    <div class="setting-row" style="gap:10px">
+      <span style="font-size:20px">${c.emoji}</span>
+      <span class="setting-label" style="flex:1">${c.name}</span>
+      <span class="legend-dot" style="background:${c.color};width:12px;height:12px;border-radius:50%;flex-shrink:0"></span>
+      <button class="setting-action" style="padding:6px 10px;font-size:12px" onclick="editCategory(${i})">✏️</button>
+    </div>
+  `).join('');
+}
+
+function editCategory(index) {
+  const cats = getCategories();
+  const cat = cats[index];
+  const newName = prompt('Kategorie-Name:', cat.name);
+  if (newName === null) return;
+  const newEmoji = prompt('Emoji:', cat.emoji);
+  if (newEmoji === null) return;
+  
+  // Initialize custom categories if needed
+  if (!data.customCategories) {
+    data.customCategories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+  }
+  data.customCategories[index].name = newName.trim() || cat.name;
+  data.customCategories[index].emoji = newEmoji.trim() || cat.emoji;
+  CATEGORIES = getCategories();
+  saveData();
+  renderCategoryList();
+  toast('Kategorie aktualisiert');
+}
+
+function addCategory() {
+  const name = prompt('Name der neuen Kategorie:');
+  if (!name) return;
+  const emoji = prompt('Emoji für die Kategorie:', '📌');
+  if (emoji === null) return;
+  
+  const id = name.toLowerCase().replace(/[^a-z0-9]/g, '_').substring(0, 20) + '_' + Date.now().toString(36);
+  const colors = ['#2563EB','#7C3AED','#DB2777','#DC2626','#EA580C','#CA8A04','#16A34A','#0891B2','#4F46E5','#64748B'];
+  const color = colors[Math.floor(Math.random() * colors.length)];
+  
+  if (!data.customCategories) {
+    data.customCategories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+  }
+  data.customCategories.push({ id, name: name.trim(), emoji: emoji.trim() || '📌', color });
+  CATEGORIES = getCategories();
+  saveData();
+  renderCategoryList();
+  toast('Kategorie hinzugefügt');
 }
 
 // ===== MODALS =====
@@ -1583,7 +1686,8 @@ function renderBookingTypeSeg() {
 function renderCatGrid(prefix) {
   const sel = prefix === 'booking' ? bookingCategory : fixCategory;
   const el = document.getElementById(prefix + '-cat-grid');
-  el.innerHTML = CATEGORIES.map(c => `
+  const cats = getCategories();
+  el.innerHTML = cats.map(c => `
     <button class="cat-btn ${sel === c.id ? 'selected' : ''}" onclick="selectCat('${prefix}','${c.id}')">
       <span class="cat-emoji">${c.emoji}</span>${c.name}
     </button>
@@ -1663,6 +1767,8 @@ function openFixModal(fix) {
     fixInterval = fix.interval;
     document.getElementById('fix-name').value = fix.name;
     document.getElementById('fix-amount').value = fix.amount;
+    document.getElementById('fix-gueltig-ab').value = fix.gueltigAb || '';
+    document.getElementById('fix-gueltig-bis').value = fix.gueltigBis || '';
   } else {
     fixType = 'expense';
     fixCategory = null;
@@ -1670,6 +1776,8 @@ function openFixModal(fix) {
     fixInterval = 'monthly';
     document.getElementById('fix-name').value = '';
     document.getElementById('fix-amount').value = '';
+    document.getElementById('fix-gueltig-ab').value = '';
+    document.getElementById('fix-gueltig-bis').value = '';
   }
   
   renderFixTypeSeg();
@@ -1718,6 +1826,9 @@ function saveFix() {
   if (!amount || amount <= 0) { toast('Bitte Betrag eingeben'); return; }
   if (!fixCategory) { toast('Bitte Kategorie wählen'); return; }
   
+  const gueltigAb = document.getElementById('fix-gueltig-ab').value || null;
+  const gueltigBis = document.getElementById('fix-gueltig-bis').value || null;
+  
   const entry = {
     id: editingFixId || uid(),
     type: fixType,
@@ -1725,7 +1836,9 @@ function saveFix() {
     amount: amount,
     category: fixCategory,
     account: fixAccount,
-    interval: fixInterval
+    interval: fixInterval,
+    gueltigAb: gueltigAb,
+    gueltigBis: gueltigBis
   };
   
   if (editingFixId) {
