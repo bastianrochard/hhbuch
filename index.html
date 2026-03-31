@@ -970,30 +970,39 @@ function saveNcConfig() {
   testNcConnection(config);
 }
 
+// Cloudflare Worker Proxy URL
+const PROXY_URL = 'https://haushaltsbuch-sync.bastian-rochard.workers.dev';
+
 function ncWebDAVUrl(config) {
   return config.url + '/remote.php/dav/files/' + encodeURIComponent(config.user) + config.path;
 }
 
-function ncHeaders(config) {
-  return {
+// All requests go through Cloudflare Worker to avoid CORS
+async function proxyFetch(targetUrl, method, config, extraHeaders, body) {
+  const headers = {
     'Authorization': 'Basic ' + btoa(config.user + ':' + config.pass),
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'X-Target-URL': targetUrl,
+    ...extraHeaders
   };
+  
+  const opts = { method, headers };
+  if (body && !['GET', 'HEAD'].includes(method)) {
+    opts.body = body;
+  }
+  
+  return fetch(PROXY_URL, opts);
 }
 
 async function testNcConnection(config) {
   try {
-    // Try to GET the file
-    const resp = await fetch(ncWebDAVUrl(config), {
-      method: 'GET',
-      headers: ncHeaders(config)
-    });
+    const targetUrl = ncWebDAVUrl(config);
+    const resp = await proxyFetch(targetUrl, 'GET', config, {}, null);
     
     if (resp.status === 200) {
       ncEtag = resp.headers.get('ETag');
       document.getElementById('nc-test-result').innerHTML = '<span style="color:var(--green)">✅ Verbunden! Datei gefunden.</span>';
       updateSyncBanner('ok', 'Verbunden mit Nextcloud');
-      // Load remote data
       const remoteData = await resp.json();
       if (remoteData && remoteData.fixkosten) {
         data = remoteData;
@@ -1003,14 +1012,9 @@ async function testNcConnection(config) {
         toast('Daten von Nextcloud geladen');
       }
     } else if (resp.status === 404) {
-      // File doesn't exist yet — create it
       document.getElementById('nc-test-result').innerHTML = '<span style="color:var(--accent)">📁 Erstelle Datei…</span>';
       await ensureNcFolder(config);
-      const putResp = await fetch(ncWebDAVUrl(config), {
-        method: 'PUT',
-        headers: ncHeaders(config),
-        body: JSON.stringify(data, null, 2)
-      });
+      const putResp = await proxyFetch(targetUrl, 'PUT', config, {}, JSON.stringify(data, null, 2));
       if (putResp.ok) {
         ncEtag = putResp.headers.get('ETag');
         document.getElementById('nc-test-result').innerHTML = '<span style="color:var(--green)">✅ Verbunden! Datei erstellt.</span>';
@@ -1027,25 +1031,20 @@ async function testNcConnection(config) {
   } catch (err) {
     console.error('NC connection test:', err);
     const msg = err.message || 'Unbekannter Fehler';
-    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-      document.getElementById('nc-test-result').innerHTML = '<span style="color:var(--red)">❌ Verbindung fehlgeschlagen. Prüfe die URL und ob CORS/WebDAV aktiviert ist.</span>';
-    } else {
-      document.getElementById('nc-test-result').innerHTML = `<span style="color:var(--red)">❌ Fehler: ${msg}</span>`;
-    }
+    document.getElementById('nc-test-result').innerHTML = `<span style="color:var(--red)">❌ Fehler: ${msg}</span>`;
     updateSyncBanner('error', 'Verbindung fehlgeschlagen');
   }
 }
 
 async function ensureNcFolder(config) {
-  // Create parent folder(s) via MKCOL
   const parts = config.path.split('/').filter(Boolean);
-  parts.pop(); // Remove filename
+  parts.pop();
   let folderPath = '';
   for (const part of parts) {
     folderPath += '/' + part;
     const folderUrl = config.url + '/remote.php/dav/files/' + encodeURIComponent(config.user) + folderPath;
     try {
-      await fetch(folderUrl, { method: 'MKCOL', headers: ncHeaders(config) });
+      await proxyFetch(folderUrl, 'MKCOL', config, {}, null);
     } catch(e) { /* folder may already exist */ }
   }
 }
@@ -1063,38 +1062,31 @@ function debouncedSyncToNc() {
 
 async function syncToNc() {
   const config = loadNcConfig();
-  if (!config) return; // No NC configured, local only
+  if (!config) return;
   if (syncInProgress) return;
   
   syncInProgress = true;
   updateSyncBanner('syncing', 'Speichere…');
   
   try {
-    const headers = ncHeaders(config);
-    
-    // Use If-Match to detect conflicts
+    const targetUrl = ncWebDAVUrl(config);
+    const extraHeaders = {};
     if (ncEtag) {
-      headers['If-Match'] = ncEtag;
+      extraHeaders['If-Match'] = ncEtag;
     }
     
-    const resp = await fetch(ncWebDAVUrl(config), {
-      method: 'PUT',
-      headers: headers,
-      body: JSON.stringify(data, null, 2)
-    });
+    const resp = await proxyFetch(targetUrl, 'PUT', config, extraHeaders, JSON.stringify(data, null, 2));
     
     if (resp.ok) {
       ncEtag = resp.headers.get('ETag');
-      updateSyncBanner('ok', 'Gespeichert');
-      // Fade out "Gespeichert" after 3s
+      updateSyncBanner('ok', 'Gespeichert ✓');
       setTimeout(() => {
         const banner = document.getElementById('sync-status-banner');
-        if (banner && banner.querySelector('#sync-status-text').textContent === 'Gespeichert') {
+        if (banner && document.getElementById('sync-status-text').textContent === 'Gespeichert ✓') {
           updateSyncBanner('ok', 'Sync aktiv');
         }
       }, 3000);
     } else if (resp.status === 412) {
-      // Precondition Failed = ETag mismatch = CONFLICT
       updateSyncBanner('error', 'Konflikt erkannt');
       showConflictDialog();
     } else if (resp.status === 401) {
@@ -1115,10 +1107,8 @@ async function syncFromNc() {
   if (!config) return false;
   
   try {
-    const resp = await fetch(ncWebDAVUrl(config), {
-      method: 'GET',
-      headers: ncHeaders(config)
-    });
+    const targetUrl = ncWebDAVUrl(config);
+    const resp = await proxyFetch(targetUrl, 'GET', config, {}, null);
     
     if (resp.ok) {
       ncEtag = resp.headers.get('ETag');
@@ -1144,7 +1134,6 @@ function updateSyncBanner(state, text) {
   document.getElementById('sync-status-icon').textContent = icons[state] || '❓';
   document.getElementById('sync-status-text').textContent = text;
   
-  // Also update dashboard subtitle
   const dashSub = document.getElementById('dash-subtitle');
   if (dashSub) {
     const config = loadNcConfig();
@@ -1163,7 +1152,6 @@ async function resolveConflict(choice) {
   document.getElementById('conflict-dialog').classList.remove('open');
   
   if (choice === 'remote') {
-    // Load remote version
     const loaded = await syncFromNc();
     if (loaded) {
       toast('Nextcloud-Version übernommen');
@@ -1172,15 +1160,11 @@ async function resolveConflict(choice) {
       renderBuchungen();
     }
   } else if (choice === 'local') {
-    // Force push local version (without If-Match)
     const config = loadNcConfig();
     if (config) {
       try {
-        const resp = await fetch(ncWebDAVUrl(config), {
-          method: 'PUT',
-          headers: ncHeaders(config),
-          body: JSON.stringify(data, null, 2)
-        });
+        const targetUrl = ncWebDAVUrl(config);
+        const resp = await proxyFetch(targetUrl, 'PUT', config, {}, JSON.stringify(data, null, 2));
         if (resp.ok) {
           ncEtag = resp.headers.get('ETag');
           updateSyncBanner('ok', 'Eigene Version hochgeladen');
@@ -1191,7 +1175,6 @@ async function resolveConflict(choice) {
       }
     }
   }
-  // 'cancel' → do nothing
 }
 
 // Fill NC config form when settings page loads
